@@ -12,12 +12,22 @@ WINDOW_HEIGHT :: 600
 PLAYER_SIZE   :: 50
 PLAYER_SPEED  :: 300.0 // pixels per second
 
+// Game mode enumeration
+GameMode :: enum {
+    PLAYING,
+    VICTORY,
+    DEFEAT,
+}
+
 // Game state
 GameState :: struct {
     player:     game.Player,
+    enemy:      game.Enemy,
     play_area:  util.Rectangle,
+    obstacle:   util.Obstacle,
     running:    bool,
     last_time:  time.Time,
+    mode:       GameMode,
 }
 
 game_state: GameState
@@ -38,11 +48,27 @@ init_game :: proc() -> bool {
     player_y := f32(WINDOW_HEIGHT / 2 - PLAYER_SIZE / 2)
     game_state.player = game.create_player(player_x, player_y, PLAYER_SIZE, PLAYER_SIZE, PLAYER_SPEED)
     
+    // Create enemy in random position
+    enemy_x := f32(100)
+    enemy_y := f32(100)
+    game_state.enemy = game.create_enemy(enemy_x, enemy_y, 60, 40) // Slightly larger than player
+    
     // Define play area (entire window)
     game_state.play_area = util.rect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
     
+    // Create obstacle in center
+    obstacle_width: f32 = 100
+    obstacle_height: f32 = 100
+    obstacle_x := f32(WINDOW_WIDTH/2 - obstacle_width/2)
+    obstacle_y := f32(WINDOW_HEIGHT/2 - obstacle_height/2)
+    game_state.obstacle = util.Obstacle{
+        rect = util.rect(obstacle_x, obstacle_y, obstacle_width, obstacle_height),
+        color = {100, 100, 100}, // Gray
+    }
+    
     game_state.running = true
     game_state.last_time = time.now()
+    game_state.mode = .PLAYING
     
     return true
 }
@@ -68,8 +94,76 @@ update_game :: proc() {
         return
     }
     
-    // Update player
-    game.update_player(&game_state.player, game_state.play_area, dt)
+    switch game_state.mode {
+    case .PLAYING:
+        // Update player (with enemy collision)
+        game.update_player(&game_state.player, game_state.play_area, &game_state.enemy, dt)
+        
+        // Update enemy (with player collision)
+        game.update_enemy(&game_state.enemy, game_state.play_area, &game_state.player, dt)
+        
+        // Update enemy projectiles
+        game.update_enemy_projectiles(&game_state.enemy, &game_state.player, &game_state.obstacle, dt)
+        
+        // Update projectiles with collision detection
+        game.update_projectiles(&game_state.player, game_state.play_area, &game_state.enemy, &game_state.obstacle, dt)
+        
+        // Check if enemy is dead
+        if !game.is_enemy_alive(&game_state.enemy) {
+            game_state.mode = .VICTORY
+        }
+        
+        // Check if player is dead
+        if !game.is_player_alive(&game_state.player) {
+            game_state.mode = .DEFEAT
+        }
+        
+    case .VICTORY:
+        // Check for restart (left click on restart button area)
+        if engine.is_left_mouse_clicked() {
+            mouse_x, mouse_y := engine.get_mouse_pos()
+            button_x := f32(WINDOW_WIDTH/2 - 60)
+            button_y := f32(WINDOW_HEIGHT/2 + 50)
+            button_width: f32 = 120
+            button_height: f32 = 40
+            
+            if f32(mouse_x) >= button_x && f32(mouse_x) <= button_x + button_width &&
+               f32(mouse_y) >= button_y && f32(mouse_y) <= button_y + button_height {
+                restart_game()
+            }
+        }
+    
+    case .DEFEAT:
+        // Check for restart (left click on restart button area)
+        if engine.is_left_mouse_clicked() {
+            mouse_x, mouse_y := engine.get_mouse_pos()
+            button_x := f32(WINDOW_WIDTH/2 - 60)
+            button_y := f32(WINDOW_HEIGHT/2 + 50)
+            button_width: f32 = 120
+            button_height: f32 = 40
+            
+            if f32(mouse_x) >= button_x && f32(mouse_x) <= button_x + button_width &&
+               f32(mouse_y) >= button_y && f32(mouse_y) <= button_y + button_height {
+                restart_game()
+            }
+        }
+    }
+}
+
+// Restart the game
+restart_game :: proc() {
+    // Reset player
+    player_x := f32(WINDOW_WIDTH / 2 - PLAYER_SIZE / 2)
+    player_y := f32(WINDOW_HEIGHT / 2 - PLAYER_SIZE / 2)
+    game_state.player = game.create_player(player_x, player_y, PLAYER_SIZE, PLAYER_SIZE, PLAYER_SPEED)
+    
+    // Reset enemy
+    enemy_x := f32(100)
+    enemy_y := f32(100)
+    game_state.enemy = game.create_enemy(enemy_x, enemy_y, 60, 40)
+    
+    // Reset game mode
+    game_state.mode = .PLAYING
 }
 
 // Render the game
@@ -77,8 +171,69 @@ render_game :: proc() {
     // Clear screen to dark gray
     engine.clear_screen(50, 50, 50)
     
-    // Render player
-    game.render_player(&game_state.player)
+    switch game_state.mode {
+    case .PLAYING:
+        // Render player
+        game.render_player(&game_state.player)
+        
+        // Render obstacle
+        engine.draw_rect(game_state.obstacle.rect, game_state.obstacle.color.r, 
+                        game_state.obstacle.color.g, game_state.obstacle.color.b)
+        
+        // Render enemy
+        game.render_enemy(&game_state.enemy)
+        
+        // Render enemy projectiles
+        game.render_enemy_projectiles(&game_state.enemy)
+        
+        // Render projectiles
+        game.render_projectiles(&game_state.player)
+        
+        // Render trap
+        game.render_trap(&game_state.player.abilities.trap)
+        
+        // Render aim arrow (on top of everything else)
+        game.render_aim_arrow(&game_state.player)
+        
+        // Render spell UI at bottom
+        game.render_spell_ui(&game_state.player, WINDOW_WIDTH, WINDOW_HEIGHT)
+        
+    case .VICTORY:
+        // Render victory screen
+        
+        // Victory text (centered)
+        victory_text := "VICTORY"
+        text_size: f32 = 80
+        text_x := f32(WINDOW_WIDTH/2 - len(victory_text) * int(text_size * 0.35))
+        text_y := f32(WINDOW_HEIGHT/2 - text_size/2)
+        engine.draw_text(victory_text, text_x, text_y, text_size, 255, 255, 0) // Yellow
+        
+        // Restart button (centered below victory text)
+        button_x := f32(WINDOW_WIDTH/2 - 60)
+        button_y := f32(WINDOW_HEIGHT/2 + 50)
+        button_width: f32 = 120
+        button_height: f32 = 40
+        engine.draw_button(button_x, button_y, button_width, button_height, 
+                          "RESTART", 100, 100, 100, 255, 255, 255)
+    
+    case .DEFEAT:
+        // Render defeat screen
+        
+        // Defeat text (centered)
+        defeat_text := "DEFEAT"
+        text_size: f32 = 80
+        text_x := f32(WINDOW_WIDTH/2 - len(defeat_text) * int(text_size * 0.35))
+        text_y := f32(WINDOW_HEIGHT/2 - text_size/2)
+        engine.draw_text(defeat_text, text_x, text_y, text_size, 255, 0, 0) // Red
+        
+        // Restart button (centered below defeat text)
+        button_x := f32(WINDOW_WIDTH/2 - 60)
+        button_y := f32(WINDOW_HEIGHT/2 + 50)
+        button_width: f32 = 120
+        button_height: f32 = 40
+        engine.draw_button(button_x, button_y, button_width, button_height, 
+                          "RESTART", 100, 100, 100, 255, 255, 255)
+    }
     
     // Present frame
     engine.present()
@@ -102,7 +257,15 @@ main :: proc() {
     defer cleanup_game()
     
     fmt.println("Game initialized successfully!")
-    fmt.println("Use arrow keys to move the rectangle")
+    fmt.println("GOAL: Defeat the red enemy (10 HP) - You have 20 HP")
+    fmt.println("=== ADC CONTROLS ===")
+    fmt.println("Left-click: Basic Attack on enemy (1 dmg)")
+    fmt.println("Right-click: Move to position")
+    fmt.println("Q: Long Range Shot (3 dmg, 8s cooldown)")
+    fmt.println("W: Speed Boost (3s duration, 12s cooldown)")  
+    fmt.println("E: Place Trap (roots for 2s, 14s cooldown)")
+    fmt.println("F: Flash teleport (10s cooldown)")
+    fmt.println("Hover over ability icons for details")
     fmt.println("Press ESC to exit")
     
     // Main game loop
